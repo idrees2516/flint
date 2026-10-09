@@ -1,0 +1,189 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Flint · Cloud Sandbox & Agent Orchestration Platform
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  role      String   @default("admin") // admin | member | viewer
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Team {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  name        String
+  prefix      String
+  keyHash     String
+  scopes      String    @default("sandbox:read,sandbox:write,agent:run")
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+model Template {
+  id          String     @id @default(cuid())
+  slug        String     @unique
+  name        String
+  description String
+  category    String     // runtime | desktop | data | browser | custom
+  icon        String     @default("box")
+  baseImage   String
+  packages    String     @default("")
+  tags        String     @default("")
+  bootSeconds Int        @default(3)
+  sizeMb      Int        @default(420)
+  isOfficial  Boolean    @default(true)
+  launches    Int        @default(0)
+  sandboxes   Sandbox[]
+}
+
+model Sandbox {
+  id               String     @id @default(cuid())
+  name             String
+  status           String     @default("provisioning")
+  // provisioning | running | stopped | hibernated | error | destroying
+  driver           String     @default("local") // local | cloud-vm
+  region           String     @default("us-east-1")
+  templateId       String?
+  template         Template?  @relation(fields: [templateId], references: [id])
+  vcpu             Int        @default(2)
+  memoryGb         Int        @default(4)
+  diskGb           Int        @default(20)
+  workspacePath    String?
+  sshPort          Int?
+  parentId         String? // fork lineage
+  hibernateAfterMin Int      @default(15)
+  autoDeleteAt     DateTime?
+  lastActiveAt     DateTime   @default(now())
+  startedAt        DateTime?
+  stoppedAt        DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  snapshots        Snapshot[]
+  tasks            AgentTask[]
+  usageEvents      UsageEvent[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Snapshot {
+  id         String   @id @default(cuid())
+  sandboxId  String
+  sandbox    Sandbox  @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  name       String
+  sizeMb     Int      @default(0)
+  isTemplate Boolean  @default(false)
+  forkCount  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([sandboxId])
+}
+
+model AgentTask {
+  id            String      @id @default(cuid())
+  name          String
+  prompt        String
+  sandboxId     String?
+  sandbox       Sandbox?     @relation(fields: [sandboxId], references: [id], onDelete: SetNull)
+  model         String      @default("glm-4.7")
+  status        String      @default("queued") // queued | planning | running | done | failed | cancelled
+  maxSteps      Int         @default(12)
+  toolConcurrency Int       @default(4)
+  strategy      String      @default("react") // react | dag
+  plan          String      @default("") // JSON plan
+  result        String      @default("")
+  error         String?
+  tokensIn      Int         @default(0)
+  tokensOut     Int         @default(0)
+  costUsd       Float       @default(0)
+  steps         TaskStep[]
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([status])
+}
+
+model TaskStep {
+  id          String    @id @default(cuid())
+  taskId      String
+  task        AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  idx         Int
+  kind        String // thought | tool_call | tool_result | observation | final
+  tool        String?
+  status      String    @default("pending") // pending | running | ok | error | skipped
+  parallel    Boolean   @default(false)
+  input       String    @default("")
+  output      String    @default("")
+  durationMs  Int?
+  startedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([taskId])
+}
+
+model UsageEvent {
+  id         String   @id @default(cuid())
+  sandboxId  String
+  sandbox    Sandbox  @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  kind       String // compute | hibernate | storage | snapshot | fork | agent-llm
+  seconds    Int      @default(0)
+  vcpu       Int      @default(0)
+  costUsd    Float    @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([sandboxId, createdAt])
+  @@index([createdAt])
+}
+
+model Budget {
+  id               String   @id @default(cuid())
+  monthlyLimitUsd  Float    @default(20)
+  alertThreshold   Float    @default(0.8)
+  spentUsd         Float    @default(0)
+  alertsSent       Int      @default(0)
+  hardStop         Boolean  @default(false)
+  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String   @default("console")
+  action    String
+  resource  String
+  meta      String   @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model EventLog {
+  id        String   @id @default(cuid())
+  level     String   @default("info") // info | warn | error | success
+  source    String   @default("fleet") // fleet | sandbox | agent | billing | api
+  message   String
+  refId     String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}

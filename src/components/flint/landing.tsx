@@ -8,7 +8,7 @@ import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 import {
   Sparkles, Zap, Copy, Gauge, GitFork, Camera, Clock, ShieldCheck, Boxes, ArrowRight, Check, X,
-  ChevronRight, Terminal, Brain, Workflow, BookOpen, Plug,
+  ChevronRight, Terminal, Brain, Workflow, BookOpen, Plug, Cable,
 } from 'lucide-react'
 import { api, fmtUsd, navigate } from './lib'
 import { cn } from '@/lib/utils'
@@ -29,6 +29,7 @@ const FEATURES = [
   { icon: Workflow, title: 'Factory: FSM multi-agent workflows', desc: 'Declarative machines — plan→implement→review→fix loops, foreach fan-out, joins, guards, budgets and failure policies. One click, N agents.' },
   { icon: BookOpen, title: 'Continual harness (self-improving)', desc: 'Agent-editable memories, prompt notes, skills and subagent specs — evidence-backed refinements with versioning and rollback. The prompt improves itself.' },
   { icon: Plug, title: 'MCP + multi-provider models', desc: 'Model Context Protocol servers (Notion, Linear, GitHub, Serper…) with tool policies. 20-model catalog across 15 providers with per-model cost tracking.' },
+  { icon: Cable, title: 'ACP editor bridge (Zed · Neovim)', desc: 'Agent Client Protocol over a stdio adapter — session/new, streamed session/update notifications with tool_call events, cancel mid-turn, live model switching. Flint inside your editor.' },
   { icon: Camera, title: 'Snapshots & templates', desc: 'Snapshot any state, fork from it, promote it to a template. Ubuntu, Node, Python, Desktop+Chrome, Docker, CUDA.' },
   { icon: Terminal, title: 'SSH · web terminal · API', desc: 'Real shell in every sandbox. Full REST API + API keys + WebSocket event stream for programmatic fleets.' },
   { icon: Gauge, title: 'Live fleet metrics', desc: 'Per-second CPU/RAM/disk/network sampling pushed over WebSocket. No agents to install, no exporters to babysit.' },
@@ -309,7 +310,7 @@ export function Landing() {
               metering behind it.
             </p>
             <ul className="mt-6 space-y-2 text-sm text-zinc-400">
-              {['POST /sandboxes — provision & boot', 'POST /sessions — RLM agent sessions (persistent kernels)', 'POST /sessions/:id/messages — talk to the agent (PTC turns)', 'POST /factory/:slug/run — multi-agent machines', 'POST /sessions/:id/autonomous — goals + completion gates', 'WS / — live events + terminal stream'].map((l) => (
+              {['POST /sandboxes — provision & boot', 'POST /sessions — RLM agent sessions (persistent kernels)', 'POST /sessions/:id/messages — talk to the agent (PTC turns)', 'POST /factory/:slug/run — multi-agent machines', 'POST /sessions/:id/autonomous — goals + completion gates', 'ACP /flint-acp — editor bridge (Zed · Neovim)', 'WS / — live events + terminal stream'].map((l) => (
                 <li key={l} className="flex items-center gap-2"><ChevronRight className="h-3.5 w-3.5 text-amber-500" />{l}</li>
               ))}
             </ul>

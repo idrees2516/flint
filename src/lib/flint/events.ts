@@ -49,6 +49,9 @@ export type FlintEvent = {
     | 'autonomous:done'
     | 'autonomous:budget'
     | 'autonomous:gate-failed'
+    // ACP transport (editor bridge)
+    | 'acp:connected'
+    | 'acp:closed'
   level?: 'info' | 'warn' | 'error' | 'success'
   source?: 'fleet' | 'sandbox' | 'agent' | 'billing' | 'api'
   message: string

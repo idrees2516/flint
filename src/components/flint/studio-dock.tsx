@@ -11,10 +11,10 @@ import { cn } from '@/lib/utils'
 import type { ModelInfo } from './studio'
 import {
   Terminal, Bot, Target, Timer, BookOpen, Plug, Factory as FactoryIcon,
-  Play, Trash2, RefreshCw, Plus, Send, Zap, ChevronDown,
+  Play, Trash2, RefreshCw, Plus, Send, Zap, ChevronDown, Cable, Copy, Check,
 } from 'lucide-react'
 
-type DockTab = 'kernel' | 'swarm' | 'goals' | 'heartbeats' | 'harness' | 'mcp' | 'factory'
+type DockTab = 'kernel' | 'swarm' | 'goals' | 'heartbeats' | 'harness' | 'mcp' | 'factory' | 'acp'
 
 const TABS: { id: DockTab; label: string; icon: typeof Terminal }[] = [
   { id: 'kernel', label: 'Kernel', icon: Terminal },
@@ -24,6 +24,7 @@ const TABS: { id: DockTab; label: string; icon: typeof Terminal }[] = [
   { id: 'harness', label: 'Harness', icon: BookOpen },
   { id: 'mcp', label: 'MCP', icon: Plug },
   { id: 'factory', label: 'Factory', icon: FactoryIcon },
+  { id: 'acp', label: 'ACP', icon: Cable },
 ]
 
 export function StudioDock({
@@ -54,7 +55,9 @@ export function StudioDock({
         ))}
       </div>
       <div className="flex-1 overflow-y-auto p-3">
-        {!sessionId ? (
+        {tab === 'acp' ? (
+          <AcpTab />
+        ) : !sessionId ? (
           <p className="mt-8 text-center text-xs text-zinc-600">select a session</p>
         ) : tab === 'kernel' ? (
           <KernelTab sessionId={sessionId} />
@@ -752,6 +755,162 @@ function FactoryTab({ sessionId }: { sessionId: string }) {
           ))}
           {(factory.data?.runs ?? []).length === 0 && <p className="text-[11px] text-zinc-600">no runs yet</p>}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── ACP (Agent Client Protocol) ─────────────────────────────
+interface AcpStatus {
+  protocolVersion: number
+  metaNamespace: string
+  adapter: { command: string; transport: string }
+  methods: string[]
+  notifications: string[]
+  connections: Array<{
+    id: string
+    createdAt: number
+    lastSeenAt: number
+    client?: { name?: string; version?: string }
+    sessions: Array<{
+      sessionId: string
+      title: string
+      model: string
+      thinkingLevel: string
+      cwd?: string
+      mcpServers: number
+      promptTurns: number
+    }>
+  }>
+}
+
+function AcpTab() {
+  const status = usePoll<AcpStatus>('/acp/status', 5000)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  const d = status.data
+  const conns = d?.connections ?? []
+
+  const zedConfig = JSON.stringify(
+    {
+      flint: {
+        name: 'Flint',
+        command: 'node',
+        args: ['<flint-repo>/scripts/flint-acp.mjs'],
+        env: { FLINT_URL: 'http://127.0.0.1:3000' },
+      },
+    },
+    null,
+    2
+  )
+
+  async function copy(text: string, key: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(key)
+      setTimeout(() => setCopied(null), 1400)
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="text-[11px] leading-relaxed text-zinc-500">
+        Editor bridge (Zed · Neovim): Flint serves the Agent Client Protocol over a stdio adapter —
+        JSON-RPC 2.0, ndjson framing, session/update streaming with namespaced <span className="font-mono text-zinc-400">ai.flint.agent</span> meta.
+      </div>
+
+      {/* adapter card */}
+      <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.04] p-2.5">
+        <div className="mb-1.5 flex items-center gap-1.5">
+          <Cable className="h-3.5 w-3.5 text-amber-400" />
+          <span className="font-mono text-[11px] font-semibold text-zinc-200">flint-acp adapter</span>
+          <span className="ml-auto rounded border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[9px] text-emerald-300">
+            protocol v{d?.protocolVersion ?? 1}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 rounded border border-zinc-800 bg-zinc-900/70 px-2 py-1.5">
+          <code className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-amber-100/90">
+            {d?.adapter.command ?? 'node scripts/flint-acp.mjs'}
+          </code>
+          <button
+            className="shrink-0 text-zinc-500 hover:text-zinc-200"
+            onClick={() => void copy(d?.adapter.command ?? 'node scripts/flint-acp.mjs', 'cmd')}
+            title="copy command"
+          >
+            {copied === 'cmd' ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+          </button>
+        </div>
+        <div className="mt-1.5 grid grid-cols-2 gap-1 text-[9.5px] text-zinc-500">
+          <div>transport: <span className="text-zinc-400">stdio · ndjson</span></div>
+          <div>meta: <span className="text-zinc-400">{d?.metaNamespace ?? 'ai.flint.agent'}</span></div>
+        </div>
+      </div>
+
+      {/* served surface */}
+      <div>
+        <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">served methods ({d?.methods.length ?? 0})</div>
+        <div className="flex flex-wrap gap-1">
+          {(d?.methods ?? []).map((m) => (
+            <span key={m} className="rounded border border-zinc-800 bg-zinc-900/60 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+              {m}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* live connections */}
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+            live connections ({conns.length})
+          </span>
+          <button className="text-zinc-600 hover:text-zinc-300" onClick={status.refresh}>
+            <RefreshCw className="h-3 w-3" />
+          </button>
+        </div>
+        <div className="space-y-1.5">
+          {conns.map((c) => (
+            <div key={c.id} className="rounded border border-zinc-800/60 bg-zinc-900/40 p-2">
+              <div className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                <span className="truncate font-mono text-[10.5px] text-zinc-300">{c.id}</span>
+                {c.client?.name && (
+                  <span className="ml-auto rounded border border-zinc-800 px-1 font-mono text-[9px] text-zinc-500">{c.client.name}</span>
+                )}
+              </div>
+              {c.sessions.map((s) => (
+                <div key={s.sessionId} className="mt-1 truncate pl-3 font-mono text-[9.5px] text-zinc-500">
+                  ↳ {s.title} · {s.model} · {s.promptTurns} turn{s.promptTurns === 1 ? '' : 's'}
+                </div>
+              ))}
+              {c.sessions.length === 0 && <div className="mt-1 pl-3 text-[9.5px] text-zinc-600">no sessions yet</div>}
+            </div>
+          ))}
+          {conns.length === 0 && (
+            <p className="text-[11px] text-zinc-600">no editor connected — start one with the adapter command above</p>
+          )}
+        </div>
+      </div>
+
+      {/* Zed setup */}
+      <div>
+        <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">Zed · agents.json</div>
+        <div className="relative">
+          <pre className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/80 p-2.5 font-mono text-[10px] leading-relaxed text-zinc-400">{zedConfig}</pre>
+          <button
+            className="absolute right-1.5 top-1.5 text-zinc-500 hover:text-zinc-200"
+            onClick={() => void copy(zedConfig, 'zed')}
+            title="copy config"
+          >
+            {copied === 'zed' ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+          </button>
+        </div>
+        <p className="mt-1 text-[9.5px] leading-relaxed text-zinc-600">
+          Drop into <span className="font-mono">~/.config/zed/agents.json</span>, restart Zed, then open the agent panel and pick
+          Flint. Neovim: point an ACP plugin at the same command.
+        </p>
       </div>
     </div>
   )

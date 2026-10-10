@@ -46,9 +46,19 @@ local-*
 *.log
 dev.log
 dev.out.log
-test
-prompt
+/test
+/prompt
 
 server.log
 # Skills directory
 /skills/
+# runtime state (kernels, tool outputs, uploads)
+sandboxes/
+tool-results/
+upload/
+worklog.md
+blaxel_overview.html
+modal_vmsandbox.html
+tl_intro.html
+snapshot-design.md
+snapshot-support.md

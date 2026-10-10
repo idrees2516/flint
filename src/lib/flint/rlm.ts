@@ -21,6 +21,7 @@ import { harnessPromptBlocks, upsertItem as harnessUpsert, listItems as harnessL
 import { listTools as mcpListTools, callTool as mcpCallTool, mcpOverview } from './mcp'
 import { getDriver, counterState } from './drivers'
 import { Semaphore } from './concurrency'
+import { clearTurnCancel, isTurnCancelled } from './acp'
 
 // ── constants ───────────────────────────────────────────────
 const MAX_TURNS_PER_REQUEST = 8 // iterations of code↔observation per user turn
@@ -426,6 +427,7 @@ export interface TurnResult {
   iterations: number
   done: boolean
   goalCompleted: boolean
+  cancelled?: boolean
 }
 
 /**
@@ -473,10 +475,18 @@ export async function runTurn(sessionId: string, userText: string, opts: RunTurn
   const maxIter = opts.maxIterations ?? MAX_TURNS_PER_REQUEST
   let iterations = 0
   let finalText = ''
+  let cancelled = false
+  // clear any stale cancel flag from a previous turn before starting
+  clearTurnCancel(sessionId)
 
   try {
     const system = await systemPrompt(sessionId)
     for (let iter = 0; iter < maxIter; iter++) {
+      // ACP session/cancel lands between iterations — bail cleanly
+      if (isTurnCancelled(sessionId)) {
+        cancelled = true
+        break
+      }
       iterations++
       // steer/follow-up inbox delivery at iteration boundary
       const inbox = await drainInbox(sessionId)
@@ -580,7 +590,7 @@ export async function runTurn(sessionId: string, userText: string, opts: RunTurn
         level: result.ok ? 'info' : 'warn',
         message: `kernel ${result.ok ? 'ok' : 'error'} · ${result.durationMs}ms: ${observation.slice(0, 120)}`,
         refId: sessionId,
-        data: { sessionId, ok: result.ok, durationMs: result.durationMs },
+        data: { sessionId, ok: result.ok, durationMs: result.durationMs, observation: observation.slice(0, 4000) },
       })
 
       // consume done / goal-complete signals raised by host fns during eval
@@ -593,6 +603,17 @@ export async function runTurn(sessionId: string, userText: string, opts: RunTurn
         await appendMessage(sessionId, ++maxIdx, 'assistant', 'chat', `**${finalText}**`)
         break
       }
+    }
+
+    if (cancelled) {
+      const tailDesc = await db.sessionMessage.findMany({
+        where: { sessionId },
+        orderBy: { idx: 'desc' },
+        take: 4,
+      })
+      const lastProse = tailDesc.find((m) => m.role === 'assistant' && m.kind === 'chat')
+      finalText = lastProse?.content?.slice(0, 1200) || '(turn cancelled)'
+      clearTurnCancel(sessionId)
     }
 
     if (!finalText) {
@@ -621,11 +642,12 @@ export async function runTurn(sessionId: string, userText: string, opts: RunTurn
     bus.emit({
       type: 'session:turn-done',
       source: 'agent',
-      level: 'success',
-      message: `turn done on "${session.name}": ${finalText.slice(0, 140)}`,
+      level: cancelled ? 'warn' : 'success',
+      message: `turn ${cancelled ? 'cancelled' : 'done'} on "${session.name}": ${finalText.slice(0, 140)}`,
       refId: sessionId,
+      data: { sessionId, cancelled, iterations, budgetReached: !cancelled && iterations >= maxIter, final: finalText.slice(0, 8000) },
     })
-    return { final: finalText, iterations, done: turnState.done, goalCompleted: turnState.goalCompleted }
+    return { final: finalText, iterations, done: turnState.done, goalCompleted: turnState.goalCompleted, cancelled }
   } catch (e) {
     await db.agentSession
       .update({ where: { id: sessionId }, data: { status: 'error', lastMessage: String(e).slice(0, 500), lastActiveAt: new Date() } })

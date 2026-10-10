@@ -79,6 +79,7 @@ model Sandbox {
   snapshots        Snapshot[]
   tasks            AgentTask[]
   usageEvents      UsageEvent[]
+  sessions         AgentSession[]
 
   @@index([status])
   @@index([createdAt])
@@ -186,4 +187,194 @@ model EventLog {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Flint · RLM Sessions (prime-agent parity)
+// Append-only transcripts, fork lineage, compaction state,
+// recursive subagent forests, A2A messaging.
+// ─────────────────────────────────────────────────────────────
+
+model AgentSession {
+  id            String    @id @default(cuid())
+  name          String
+  role          String    @default("main") // main | subagent | decision | factory-node
+  depth         Int       @default(0) // 0 = root session
+  parentId      String? // parent session (subagent lineage)
+  forkOfId      String? // fork lineage
+  status        String    @default("idle") // idle | thinking | running | idle-evicted | archived | error
+  provider      String    @default("zai")
+  model         String    @default("glm-4.7")
+  thinkingLevel String    @default("off") // off | low | medium | high
+  sandboxId     String?
+  sandbox       Sandbox?  @relation(fields: [sandboxId], references: [id], onDelete: SetNull)
+  goalId        String? // active goal driving continuation
+  kernelOk      Boolean   @default(true) // kernel process alive
+  compactedAt   DateTime?
+  compactCount  Int       @default(0)
+  tokensIn      Int       @default(0)
+  tokensOut     Int       @default(0)
+  costUsd       Float     @default(0)
+  turnCount     Int       @default(0)
+  lastMessage   String    @default("")
+  lastActiveAt  DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  messages  SessionMessage[]
+  children  AgentSession[]  @relation("SubagentTree")
+  parent    AgentSession?   @relation("SubagentTree", fields: [parentId], references: [id], onDelete: SetNull)
+  inbox     AgentMessage[]  @relation("MsgTo")
+  outbox    AgentMessage[]  @relation("MsgFrom")
+  goals     AgentGoal[]
+  heartbeats Heartbeat[]
+
+  @@index([status])
+  @@index([parentId])
+  @@index([lastActiveAt])
+}
+
+model SessionMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  idx       Int
+  role      String // system | user | assistant | tool | event | summary
+  kind      String   @default("chat") // chat | code | stdout | a2a | goal | heartbeat | compact | gate | error | spawn
+  content   String
+  meta      String   @default("{}")
+  tokensIn  Int      @default(0)
+  tokensOut Int      @default(0)
+  costUsd   Float    @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, idx])
+}
+
+model AgentMessage {
+  id          String   @id @default(cuid())
+  fromId      String
+  from        AgentSession @relation("MsgFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  toId        String // "*" = broadcast to nuclear family
+  to          AgentSession @relation("MsgTo", fields: [toId], references: [id], onDelete: Cascade)
+  body        String
+  mode        String   @default("follow-up") // steer | follow-up
+  status      String   @default("pending") // pending | delivered | read
+  createdAt   DateTime @default(now())
+
+  @@index([toId, status])
+  @@index([fromId])
+}
+
+model AgentGoal {
+  id           String   @id @default(cuid())
+  sessionId    String
+  session      AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  objective    String
+  status       String   @default("active") // active | complete | exhausted | cancelled
+  tokenBudget  Int      @default(80000)
+  tokensUsed   Int      @default(0)
+  turnsUsed    Int      @default(0)
+  result       String   @default("")
+  createdAt    DateTime @default(now())
+  completedAt  DateTime?
+
+  @@index([status])
+}
+
+model Heartbeat {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  name      String
+  cron      String // 5-field cron expression
+  prompt    String // prompt delivered on each fire
+  mode      String   @default("follow-up") // steer | follow-up
+  enabled   Boolean  @default(true)
+  lastFiredAt DateTime?
+  nextFireAt DateTime?
+  fireCount Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([enabled, nextFireAt])
+}
+
+// Continual Harness — self-improvement substrate
+model HarnessItem {
+  id         String   @id @default(cuid())
+  kind       String // memory | prompt_note | skill | subagent_spec
+  name       String
+  content    String
+  scope      String   @default("global") // global | session
+  sessionId  String? // when scope=session
+  tags       String   @default("")
+  useCount   Int      @default(0)
+  version    Int      @default(1)
+  enabled    Boolean  @default(true)
+  refinements Refinement[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([kind, scope])
+  @@unique([kind, name, scope])
+}
+
+model Refinement {
+  id         String   @id @default(cuid())
+  itemId     String
+  item       HarnessItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  reason     String
+  before     String
+  after      String
+  status     String   @default("planned") // planned | applied | rolled-back
+  plannerModel String @default("glm-4.7")
+  createdAt  DateTime @default(now())
+  appliedAt  DateTime?
+
+  @@index([itemId])
+}
+
+model McpServer {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  transport   String   @default("http") // http | stdio
+  url         String   @default("")
+  command     String   @default("") // stdio only
+  args        String   @default("[]")
+  headers     String   @default("{}")
+  bearerTokenEnvVar String @default("")
+  enabled     Boolean  @default(true)
+  enabledTools String   @default("[]") // JSON array; empty = all
+  disabledTools String @default("[]")
+  toolCount   Int      @default(0)
+  lastListAt  DateTime?
+  createdAt   DateTime @default(now())
+}
+
+model FactoryMachine {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String   @default("")
+  spec        String // JSON machine-spec: nodes, edges, foreach, guards, budgets
+  isOfficial  Boolean  @default(true)
+  runs        FactoryRun[]
+  createdAt   DateTime @default(now())
+}
+
+model FactoryRun {
+  id          String   @id @default(cuid())
+  machineId   String
+  machine     FactoryMachine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  sessionId   String? // root session that launched it
+  status      String   @default("queued") // queued | running | done | failed | stopped
+  input       String   @default("{}")
+  nodeStates  String   @default("{}") // JSON per-node status/output
+  budgetMs    Int      @default(600000)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  error       String?
+  createdAt   DateTime @default(now())
+
+  @@index([status])
 }

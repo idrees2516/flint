@@ -112,8 +112,12 @@ export async function seedFlint(): Promise<void> {
   if ((await db.budget.count()) === 0) {
     await db.budget.create({ data: { monthlyLimitUsd: 20, alertThreshold: 0.8 } })
   }
+  // ── RLM seeds: harness items, MCP servers, factory machines ──
+  await seedHarness()
+  await seedMcp()
+  await seedMachines()
   // demo fleet — only on fresh DB
-  if ((await db.sandbox.count()) > 0) return
+  if ((await db.sandbox.count()) > 0) {await seedDemoRlmSession(); return}
   const tpl = async (slug: string) => (await db.template.findUnique({ where: { slug } }))?.id
   const mk = async (data: {
     name: string
@@ -177,6 +181,223 @@ export async function seedFlint(): Promise<void> {
       { level: 'success', source: 'fleet', message: 'Flint control plane online — 24 orchestrator lanes, 1s metering' },
       { level: 'info', source: 'billing', message: 'Per-second billing active · $0.008/hr per 2vCPU·4GB' },
       { level: 'info', source: 'agent', message: 'Agent runtime ready · react + dag strategies, parallel tools' },
+      { level: 'success', source: 'agent', message: 'RLM engine online — persistent Python kernels, subagents, A2A, factory, heartbeats' },
+    ],
+  })
+}
+
+// ── RLM seeds ───────────────────────────────────────────────
+async function seedHarness(): Promise<void> {
+  const items = [
+    {
+      kind: 'memory',
+      name: 'platform-conventions',
+      content: 'Flint is a cloud sandbox + agent orchestration platform. Compute pricing: $0.0000022/vCPU/s + $0.0000006/GB/s. Hibernated sandboxes cost ~92% less. The agent runtime prefers batching tool calls in parallel.',
+      tags: 'platform,pricing',
+    },
+    {
+      kind: 'prompt_note',
+      name: 'verify-before-done',
+      content: 'Before calling flint_done, verify claims with real commands (run tests, cat files, check exit codes). Never assert success without evidence.',
+      tags: 'quality',
+    },
+    {
+      kind: 'skill',
+      name: 'parallel-research',
+      content: 'Parallel research pattern: spawn 2-4 subagents with distinct search angles via host("spawn", name, prompt), store handles in a list, then collect them all with host("collect", h) and synthesize. Prefer angles: official docs, community discussion, source code, benchmarks.',
+      tags: 'research,multi-agent',
+    },
+    {
+      kind: 'subagent_spec',
+      name: 'code-reviewer',
+      content: 'A focused reviewer subagent. Prompt template: "Review {{target}} for correctness, security and style. List concrete issues with file:line. Be terse, no praise." Model: glm-4.7-flash. Returns: markdown issue list.',
+      tags: 'review',
+    },
+  ]
+  for (const i of items) {
+    await db.harnessItem.upsert({
+      where: { kind_name_scope: { kind: i.kind, name: i.name, scope: 'global' } },
+      update: {},
+      create: { ...i, scope: 'global' },
+    })
+  }
+}
+
+async function seedMcp(): Promise<void> {
+  const servers = [
+    { name: 'notion', transport: 'http', url: 'https://mcp.notion.com/mcp', enabled: false },
+    { name: 'linear', transport: 'http', url: 'https://mcp.linear.app/sse', enabled: false },
+    { name: 'serper', transport: 'http', url: 'https://flint-mcp.serper.dev/mcp', enabled: true },
+    { name: 'github', transport: 'http', url: 'https://api.githubcopilot.com/mcp/', enabled: false },
+    { name: 'filesystem', transport: 'stdio', url: '', command: 'npx -y @modelcontextprotocol/server-filesystem', enabled: false },
+  ]
+  for (const s of servers) {
+    await db.mcpServer.upsert({
+      where: { name: s.name },
+      update: {},
+      create: { ...s, toolCount: 0 },
+    })
+  }
+}
+
+async function seedMachines(): Promise<void> {
+  const machines = [
+    {
+      slug: 'builder',
+      name: 'Builder',
+      description: 'Plan → implement → review → fix loop with a completion gate (tests must pass).',
+      spec: {
+        entry: 'plan',
+        maxParallel: 3,
+        nodes: [
+          {
+            id: 'plan',
+            kind: 'agent' as const,
+            title: 'Plan the implementation',
+            prompt: 'Read the repo in your kernel (ls, read files). Produce a minimal implementation plan for: {{input.task}}. Output the plan only.',
+            model: 'glm-4.7',
+            next: ['implement'],
+          },
+          {
+            id: 'implement',
+            kind: 'agent' as const,
+            title: 'Implement the plan',
+            prompt: 'Implement this plan in your kernel workspace using write()/edit(). Plan:\n{{node.plan}}\nThen run the checks. Finish with flint_done(summary of what you wrote and how it went).',
+            model: 'glm-4.7',
+            next: ['review'],
+          },
+          {
+            id: 'review',
+            kind: 'agent' as const,
+            title: 'Review the diff',
+            prompt: 'Review the implementation described here for correctness and edge cases. List concrete issues or APPROVE.\nImplementation report:\n{{node.implement}}',
+            model: 'glm-4.7-flash',
+            next: ['fix'],
+          },
+          {
+            id: 'fix',
+            kind: 'agent' as const,
+            title: 'Apply review fixes if needed',
+            prompt: 'Review verdict:\n{{node.review}}\nIf changes are needed, apply them (write/edit). Then verify with real commands. If APPROVED, just confirm and finish with flint_done.',
+            model: 'glm-4.7',
+            next: [],
+          },
+        ],
+      },
+    },
+    {
+      slug: 'pr-manager',
+      name: 'PR Manager',
+      description: 'Fan-out PR triage: classify, summarize, and draft responses — one child per PR.',
+      spec: {
+        entry: 'triage',
+        maxParallel: 4,
+        nodes: [
+          {
+            id: 'triage',
+            kind: 'agent' as const,
+            title: 'Per-PR triage',
+            foreach: ['{{input.pr}}'],
+            prompt: 'Triage this PR as item {{item}}. Classify (bug|feature|refactor|docs), summarize in 2 sentences, and draft a friendly review response. Use websearch for unfamiliar code.',
+            model: 'glm-4.7-flash',
+            next: ['join'],
+          },
+          {
+            id: 'join',
+            kind: 'join' as const,
+            title: 'Collect triage results',
+            prompt: '',
+            next: ['report'],
+          },
+          {
+            id: 'report',
+            kind: 'agent' as const,
+            title: 'Compose the report',
+            prompt: 'Compose a single markdown triage report from these results:\n{{node.join}}',
+            model: 'glm-4.7',
+            next: [],
+          },
+        ],
+      },
+    },
+    {
+      slug: 'review-sweep',
+      name: 'Review Sweep',
+      description: 'Sweep a repo: one reviewer per area (security, perf, style), then merge findings.',
+      spec: {
+        entry: 'areas',
+        maxParallel: 3,
+        nodes: [
+          {
+            id: 'areas',
+            kind: 'agent' as const,
+            title: 'Area reviewers',
+            foreach: ['security', 'performance', 'style'],
+            prompt: 'Review the repo in your kernel for {{item}} issues only. List concrete file:line findings or CLEAN. Be terse.',
+            model: 'glm-4.7-flash',
+            next: ['merge'],
+          },
+          {
+            id: 'merge',
+            kind: 'join' as const,
+            title: 'Merge findings',
+            prompt: '',
+            next: ['final'],
+          },
+          {
+            id: 'final',
+            kind: 'agent' as const,
+            title: 'Prioritized report',
+            prompt: 'Merge these review findings into one prioritized report (P0/P1/P2):\n{{node.merge}}',
+            model: 'glm-4.7',
+            next: [],
+          },
+        ],
+      },
+    },
+  ]
+  for (const m of machines) {
+    await db.factoryMachine.upsert({
+      where: { slug: m.slug },
+      update: {},
+      create: { slug: m.slug, name: m.name, description: m.description, spec: JSON.stringify(m.spec), isOfficial: true },
+    })
+  }
+}
+
+/** Seed a demo RLM session with a short illustrative transcript. */
+async function seedDemoRlmSession(): Promise<void> {
+  if ((await db.agentSession.count()) > 0) return
+  const session = await db.agentSession.create({
+    data: {
+      name: 'research · flint vs competitors',
+      model: 'glm-4.7',
+      status: 'idle',
+      lastMessage: 'Compared Flint to 4 competitors on sandbox boot time, pricing and agent tooling. Full comparison in kernel variable `report`.',
+      turnCount: 3,
+      tokensIn: 4820,
+      tokensOut: 1910,
+      costUsd: 0.0062,
+    },
+  })
+  await db.sessionMessage.createMany({
+    data: [
+      { sessionId: session.id, idx: 0, role: 'user', kind: 'chat', content: 'Research how Flint compares to other sandbox platforms and write a short report.' },
+      {
+        sessionId: session.id,
+        idx: 1,
+        role: 'assistant',
+        kind: 'code',
+        content: 'results = [websearch(f"{p} sandbox platform pricing", 5) for p in ["e2b", "daytona", "modal"]]\nhandles = [bash("sleep 0.1; echo done") for _ in results]\nreport = "\\n\\n".join(results)\nlen(report)',
+      },
+      { sessionId: session.id, idx: 2, role: 'tool', kind: 'stdout', content: 'stdout:\n2418\n' },
+      {
+        sessionId: session.id,
+        idx: 3,
+        role: 'assistant',
+        kind: 'chat',
+        content: '**Researched 4 competitors.** Flint is differentiated by: O(1) COW forks, 1s billing granularity, and the RLM agent runtime (persistent Python kernel + subagents). Full report stored in kernel variable `report`.',
+      },
     ],
   })
 }

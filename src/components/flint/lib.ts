@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { io, type Socket } from 'socket.io-client'
 
 // ── types ────────────────────────────────────────────────────
-export type View = 'landing' | 'dashboard' | 'sandboxes' | 'terminal' | 'agents' | 'templates' | 'cost' | 'api'
+export type View = 'landing' | 'dashboard' | 'sandboxes' | 'terminal' | 'agents' | 'studio' | 'templates' | 'cost' | 'api'
 
 export interface Template {
   id: string

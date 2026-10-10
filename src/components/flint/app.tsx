@@ -8,10 +8,11 @@ import { Dashboard } from './dashboard'
 import { Sandboxes } from './sandboxes'
 import { TerminalView } from './terminal-view'
 import { Agents } from './agents'
+import { Studio } from './studio'
 import { TemplatesView } from './templates-view'
 import { CostView } from './cost-view'
 import { ApiView } from './api-view'
-import { LayoutDashboard, Server, TerminalSquare, Sparkles, Boxes, DollarSign, KeyRound, Home, Zap } from 'lucide-react'
+import { LayoutDashboard, Server, TerminalSquare, Sparkles, Boxes, DollarSign, KeyRound, Home, Zap, BrainCircuit } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
 
@@ -21,6 +22,7 @@ const NAV: { view: View; label: string; icon: typeof Home }[] = [
   { view: 'sandboxes', label: 'Fleet', icon: Server },
   { view: 'terminal', label: 'Shell', icon: TerminalSquare },
   { view: 'agents', label: 'Agents', icon: Sparkles },
+  { view: 'studio', label: 'Studio', icon: BrainCircuit },
   { view: 'templates', label: 'Templates', icon: Boxes },
   { view: 'cost', label: 'Cost', icon: DollarSign },
   { view: 'api', label: 'API', icon: KeyRound },
@@ -118,6 +120,7 @@ export function FlintApp() {
         {view === 'sandboxes' && <Sandboxes />}
         {view === 'terminal' && <TerminalView sandboxId={sandboxId} />}
         {view === 'agents' && <Agents sandboxId={sandboxId} key={sandboxId ?? 'agents'} />}
+        {view === 'studio' && <Studio />}
         {view === 'templates' && <TemplatesView />}
         {view === 'cost' && <CostView />}
         {view === 'api' && <ApiView />}
@@ -126,7 +129,7 @@ export function FlintApp() {
       {/* footer — sticks to bottom on short pages */}
       <footer className="mt-auto border-t border-zinc-800/60 py-4">
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-2 px-4 text-[11px] text-zinc-600">
-          <span className="font-mono">flint v1.0 · sandbox & agent orchestration · Apache-2.0</span>
+          <span className="font-mono">flint v1.1 · sandbox & agent orchestration · RLM runtime · Apache-2.0</span>
           <span className="font-mono">$0.008/hr · per-second · free when stopped {taskId ? '' : ''}</span>
         </div>
       </footer>

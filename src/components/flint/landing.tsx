@@ -8,7 +8,7 @@ import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 import {
   Sparkles, Zap, Copy, Gauge, GitFork, Camera, Clock, ShieldCheck, Boxes, ArrowRight, Check, X,
-  ChevronRight, Terminal,
+  ChevronRight, Terminal, Brain, Workflow, BookOpen, Plug,
 } from 'lucide-react'
 import { api, fmtUsd, navigate } from './lib'
 import { cn } from '@/lib/utils'
@@ -25,7 +25,10 @@ const FEATURES = [
   { icon: GitFork, title: 'O(1) copy-on-write fork', desc: 'Fork any sandbox in single-digit milliseconds via metadata/ hardlink COW. Fan out 100 parallel test branches instantly.' },
   { icon: Clock, title: 'Auto-hibernate optimizer', desc: 'Idle watchdog hibernates quiet sandboxes to snapshot-only pricing (~92% cheaper). Wake on first SSH/exec in ~150ms.' },
   { icon: Boxes, title: '24-lane orchestrator', desc: 'Priority worker pool executes thousands of lifecycle ops concurrently with backpressure, rate limiting and retries.' },
-  { icon: Sparkles, title: 'Built-in agent runtime', desc: 'ReAct + DAG strategies with PARALLEL tool calls — batch independent tools and run them concurrently, with live step streaming.' },
+  { icon: Brain, title: 'RLM agent runtime (prime-agent class)', desc: 'Persistent Python kernel per session — programmatic tool calling, subagents with their own kernels, A2A messaging, compaction, goals with token budgets, heartbeats, autonomous gates.' },
+  { icon: Workflow, title: 'Factory: FSM multi-agent workflows', desc: 'Declarative machines — plan→implement→review→fix loops, foreach fan-out, joins, guards, budgets and failure policies. One click, N agents.' },
+  { icon: BookOpen, title: 'Continual harness (self-improving)', desc: 'Agent-editable memories, prompt notes, skills and subagent specs — evidence-backed refinements with versioning and rollback. The prompt improves itself.' },
+  { icon: Plug, title: 'MCP + multi-provider models', desc: 'Model Context Protocol servers (Notion, Linear, GitHub, Serper…) with tool policies. 20-model catalog across 15 providers with per-model cost tracking.' },
   { icon: Camera, title: 'Snapshots & templates', desc: 'Snapshot any state, fork from it, promote it to a template. Ubuntu, Node, Python, Desktop+Chrome, Docker, CUDA.' },
   { icon: Terminal, title: 'SSH · web terminal · API', desc: 'Real shell in every sandbox. Full REST API + API keys + WebSocket event stream for programmatic fleets.' },
   { icon: Gauge, title: 'Live fleet metrics', desc: 'Per-second CPU/RAM/disk/network sampling pushed over WebSocket. No agents to install, no exporters to babysit.' },
@@ -103,7 +106,7 @@ export function Landing() {
         <div className="pointer-events-none absolute inset-0 opacity-[0.15] [background-image:linear-gradient(rgba(255,255,255,.06)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.06)_1px,transparent_1px)] [background-size:44px_44px]" />
         <div className="relative mx-auto max-w-6xl px-4 pb-20 pt-20 text-center md:pt-28">
           <Badge variant="outline" className="mb-5 border-amber-500/40 bg-amber-500/10 text-amber-400">
-            <Sparkles className="mr-1 h-3 w-3" /> The open-source answer to boat.dev
+            <Sparkles className="mr-1 h-3 w-3" /> The open-source answer to boat.dev — now with a prime-agent-class RLM runtime
           </Badge>
           <h1 className="mx-auto max-w-3xl text-4xl font-black leading-[1.08] tracking-tight md:text-6xl">
             Sandboxes for agents.
@@ -111,16 +114,17 @@ export function Landing() {
             <span className="bg-gradient-to-r from-amber-300 via-orange-400 to-amber-500 bg-clip-text text-transparent">Every feature. Half the cost.</span>
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-zinc-400 md:text-lg">
-            Persistent Ubuntu sandboxes with SSH, Docker, desktop, snapshots and O(1) fork — plus a built-in
-            agent runtime with <span className="text-zinc-200">parallel tool execution</span>. Billed per second
-            at <span className="font-mono text-amber-400">$0.008/hr</span> per 2vCPU·4GB. Free when stopped.
+            Persistent Ubuntu sandboxes with SSH, Docker, desktop, snapshots and O(1) fork — plus an RLM agent
+            runtime with <span className="text-zinc-200">persistent Python kernels, subagents, A2A messaging and
+            factory workflows</span>. Billed per second at <span className="font-mono text-amber-400">$0.008/hr</span>
+            per 2vCPU·4GB. Free when stopped.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <Button size="lg" onClick={() => navigate('sandboxes')} className="bg-amber-500 font-semibold text-zinc-950 hover:bg-amber-400">
-              Launch a sandbox <ArrowRight className="ml-1 h-4 w-4" />
+            <Button size="lg" onClick={() => navigate('studio')} className="bg-amber-500 font-semibold text-zinc-950 hover:bg-amber-400">
+              <Brain className="mr-1 h-4 w-4" /> Open Agent Studio <ArrowRight className="ml-1 h-4 w-4" />
             </Button>
-            <Button size="lg" variant="outline" onClick={() => navigate('agents')} className="border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-amber-500/50 hover:text-amber-300">
-              <Sparkles className="mr-1 h-4 w-4 text-amber-500" /> Run an agent task
+            <Button size="lg" variant="outline" onClick={() => navigate('sandboxes')} className="border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-amber-500/50 hover:text-amber-300">
+              Launch a sandbox
             </Button>
           </div>
 
@@ -305,7 +309,7 @@ export function Landing() {
               metering behind it.
             </p>
             <ul className="mt-6 space-y-2 text-sm text-zinc-400">
-              {['POST /sandboxes — provision & boot', 'POST /sandboxes/:id/action — start · stop · fork · snapshot', 'POST /agent-tasks — ReAct or DAG strategy', 'WS / — live events + terminal stream'].map((l) => (
+              {['POST /sandboxes — provision & boot', 'POST /sessions — RLM agent sessions (persistent kernels)', 'POST /sessions/:id/messages — talk to the agent (PTC turns)', 'POST /factory/:slug/run — multi-agent machines', 'POST /sessions/:id/autonomous — goals + completion gates', 'WS / — live events + terminal stream'].map((l) => (
                 <li key={l} className="flex items-center gap-2"><ChevronRight className="h-3.5 w-3.5 text-amber-500" />{l}</li>
               ))}
             </ul>

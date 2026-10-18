@@ -378,3 +378,130 @@ model FactoryRun {
 
   @@index([status])
 }
+
+// ─────────────────────────────────────────────────────────────
+// Durable Mesh — Durable-Objects-style actor state + stateless
+// sandbox mesh (2026 research: Cloudflare DOs, E2B, Daytona,
+// InstaBox, microsandbox, GitHub Actions, Jupyter endpoints).
+// ─────────────────────────────────────────────────────────────
+
+// A durable actor (Cloudflare Durable Object analogue). One row per
+// named object: agent:<sessionId> | space:<name> | custom.
+model DurableObject {
+  id           String   @id @default(cuid())
+  name         String   @unique // deterministic actor name
+  className    String   @default("AgentActor") // actor class
+  status       String   @default("idle") // idle | active | hibernated
+  state        String   @default("{}") // last-synced KV state (mirror/cache)
+  stateVersion Int      @default(0)
+  opsCount     Int      @default(0)
+  storageBytes Int      @default(0)
+  eventCount   Int      @default(0)
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([className])
+  @@index([lastActiveAt])
+}
+
+// Append-only, event-sourced log per durable object (source of
+// truth lives in the actor's SQLite storage; this is the
+// queryable mirror for cross-node reads).
+model DurableEvent {
+  id        String   @id @default(cuid())
+  objectName String
+  topic     String   @default("log")
+  kind      String   @default("event")
+  payload   String   @default("{}")
+  seq       Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([objectName, seq])
+  @@index([topic, createdAt])
+}
+
+// Versioned state/kernel/filesystem snapshots — the heart of the
+// stateless-sandbox protocol: any node, any provider, any time.
+model DurableSnapshot {
+  id          String   @id @default(cuid())
+  objectName  String
+  ref         String   @unique // snap_<hash>
+  kind        String   @default("state") // state | kernel | fs | mesh
+  version     Int      @default(1)
+  sizeBytes   Int      @default(0)
+  blobPath    String   @default("") // on-disk blob (tar/json/pickle)
+  manifest    String   @default("{}")
+  forkCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([objectName, kind])
+  @@index([ref])
+}
+
+// A sandbox registered in the mesh (any provider). External
+// machines are cattle: state lives in DurableSnapshots, never in
+// the sandbox itself.
+model MeshSandbox {
+  id            String    @id @default(cuid())
+  provider      String // local | docker | instabox | e2b | daytona | github-actions | jupyter
+  externalId    String? // provider-side machine id
+  handle        String? // SDK/connection handle (JSON)
+  spec          String    @default("{}") // image, size, region, workspace
+  status        String    @default("cold") // cold | warm | busy | paused | error | recycled
+  region        String    @default("")
+  costPerHourUsd Float    @default(0)
+  usageSeconds  Float     @default(0)
+  tasksRun      Int       @default(0)
+  failures      Int       @default(0)
+  lastError     String?
+  lastHeartbeat DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  recycledAt    DateTime?
+  tasks         MeshTask[]
+
+  @@index([provider, status])
+  @@index([status])
+}
+
+// One stateless execution through the mesh: snapshot-in → exec →
+// snapshot-out. Survives provider death via cross-provider
+// failover (attempts log).
+model MeshTask {
+  id           String   @id @default(cuid())
+  sandboxId    String?
+  sandbox      MeshSandbox? @relation(fields: [sandboxId], references: [id], onDelete: SetNull)
+  provider     String
+  kind         String   @default("exec") // exec | script | notebook
+  status       String   @default("queued") // queued | running | done | failed | cancelled
+  spec         String   @default("{}") // command, files, env, timeoutMs, language
+  snapshotIn   String?  // DurableSnapshot.ref restored before exec
+  snapshotOut  String?  // DurableSnapshot.ref captured after exec
+  result       String   @default("{}") // exitCode, stdout, stderr, artifacts
+  attempts     String   @default("[]") // JSON [{provider, ok, error, durationMs}]
+  durationMs   Int      @default(0)
+  costUsd      Float    @default(0)
+  createdAt    DateTime @default(now())
+  finishedAt   DateTime?
+
+  @@index([status])
+  @@index([provider])
+}
+
+// Provider health / circuit-breaker state (mirrors in-memory
+// registry; DB copy survives restarts and drives observability).
+model ProviderHealth {
+  provider            String   @id
+  configured          Boolean  @default(false)
+  status              String   @default("unknown") // healthy | degraded | cooldown | unconfigured
+  capabilities        String   @default("[]")
+  costTier            String   @default("free")
+  inflight            Int      @default(0)
+  totalTasks          Int      @default(0)
+  failedTasks         Int      @default(0)
+  consecutiveFailures Int      @default(0)
+  cooldownUntil       DateTime?
+  lastError           String?
+  lastSuccessAt       DateTime?
+  lastCheckedAt       DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}

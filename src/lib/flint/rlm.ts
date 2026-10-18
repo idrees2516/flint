@@ -236,6 +236,17 @@ facts you already computed.
 - host("goal_get") / host("goal_complete", summary)
 - host("factory_run", machine_slug, input) → run a multi-agent workflow machine
 - host("metrics") → sandbox resource metrics
+- host("durable_state", "get"|"put"|"note"|"snapshot", ...) → your durable actor state (survives restarts)
+- host("durable_checkpoint", label) → versioned checkpoint of your durable state (restorable)
+- host("schedule_wakeup", delay_sec, prompt, mode="turn"|"note", cron?) → durable alarm that fires later (survives crashes)
+- host("space_kv", "get"|"put"|"list"|"delete", space, key, value) → shared durable KV across agents
+- host("space_publish", space, topic, payload) → publish to a shared durable space
+- host("space_subscribe", space, topic?, since_seq?) → recent events from a shared space
+- host("mesh_exec", command, opts?) → run code on the stateless sandbox mesh (free providers, snapshot-in/out)
+    opts: {language: "bash"|"python"|"node", files: {path: content}, env, timeoutMs, captureGlobs: ["*.json"],
+           snapshotIn: ref, makeSnapshotOut: bool, provider: "local"|"docker"|"instabox"|"e2b"|"daytona"|"github-actions"|"jupyter"}
+- host("mesh_providers") → live sandbox providers + health
+- host("mesh_bundle", "save"|"load", files_or_ref) → durable file bundles (state carried between mesh runs)
 
 # Finishing
 When the user's request is fully handled, call flint_done(summary) — a clear, concrete summary of what you did
@@ -637,8 +648,17 @@ export async function runTurn(sessionId: string, userText: string, opts: RunTurn
         lastActiveAt: new Date(),
       },
     })
-    // durable kernel state — snapshot to disk in the background (no latency)
-    void kernelManager.snapshot(sessionId).catch(() => null)
+    // durable kernel state — snapshot to disk + register with the durable
+    // actor (mesh-addressable resume: any node can restore this kernel)
+    void kernelManager.snapshot(sessionId)
+      .then((snap) =>
+        snap
+          ? import('./actors').then(({ agentActor }) =>
+              agentActor(sessionId).registerKernelSnapshot(snap.blob, snap.manifest).catch(() => null)
+            )
+          : null
+      )
+      .catch(() => null)
     bus.emit({
       type: 'session:turn-done',
       source: 'agent',
@@ -866,6 +886,129 @@ export function registerRlmHostFunctions(): void {
         bytesIO: counterState(sbx.id).bytesIO,
       }
     )
+  })
+
+  // ── durable runtime + stateless sandbox mesh (2026 scale layer) ──
+
+  H.registerHostFn('durable_state', async (sid, args) => {
+    const op = String(args[0] ?? 'get')
+    const { agentActor } = await import('./actors')
+    const stub = agentActor(sid)
+    if (op === 'put') {
+      const patch = (args[1] as Record<string, unknown>) ?? {}
+      const version = await stub.publishState(patch)
+      return { ok: true, version }
+    }
+    if (op === 'note') {
+      const key = String(args[1] ?? '')
+      const value = args[2]
+      await stub.setNote(key, value)
+      return { ok: true }
+    }
+    if (op === 'snapshot') return stub.stateSummary()
+    // 'get' — full durable state
+    return stub.stateSummary()
+  })
+
+  H.registerHostFn('durable_checkpoint', async (sid, args) => {
+    const label = String(args[0] ?? 'agent')
+    const { agentActor } = await import('./actors')
+    return agentActor(sid).takeCheckpoint(label)
+  })
+
+  H.registerHostFn('schedule_wakeup', async (sid, args) => {
+    const delayS = Number(args[0] ?? 60)
+    const prompt = String(args[1] ?? '')
+    const mode = args[2] === 'note' ? 'note' : 'turn'
+    const cron = args[3] ? String(args[3]) : undefined
+    if (!prompt) throw new Error('schedule_wakeup(delay_seconds, prompt, mode?, cron?) requires a prompt')
+    const { agentActor } = await import('./actors')
+    return agentActor(sid).scheduleWakeUp({ delayMs: Math.max(5, delayS) * 1000, prompt, mode, cron })
+  })
+
+  H.registerHostFn('space_kv', async (_sid, args) => {
+    const op = String(args[0] ?? 'get')
+    const space = String(args[1] ?? 'flint-agents')
+    const { spaceActor } = await import('./actors')
+    const stub = spaceActor(space)
+    if (op === 'put') {
+      const key = String(args[2] ?? '')
+      const value = args[3]
+      if (!key) throw new Error('space_kv("put", space, key, value)')
+      const entry = await stub.kvPut(key, value, 'agent')
+      return { ok: true, version: entry.version }
+    }
+    if (op === 'delete') return { deleted: await stub.kvDelete(String(args[2] ?? '')) }
+    if (op === 'list') return (await stub.kvList(args[2] ? String(args[2]) : undefined)).slice(0, 50)
+    const entry = await stub.kvGet(String(args[2] ?? ''))
+    return entry ?? { exists: false }
+  })
+
+  H.registerHostFn('space_publish', async (sid, args) => {
+    const space = String(args[0] ?? 'flint-agents')
+    const topic = String(args[1] ?? 'general')
+    const payload = args[2] ?? {}
+    const { spaceActor } = await import('./actors')
+    const r = await spaceActor(space).publish(topic, payload, { from: sid })
+    return { ok: true, seq: r.seq }
+  })
+
+  H.registerHostFn('space_subscribe', async (_sid, args) => {
+    const space = String(args[0] ?? 'flint-agents')
+    const topic = args[1] ? String(args[1]) : undefined
+    const sinceSeq = Number(args[2] ?? 0)
+    const { spaceActor } = await import('./actors')
+    const events = (await spaceActor(space).history({ topic, sinceSeq, limit: 25 })) as Array<{ seq: number; topic: string; payload: unknown; ts: number }>
+    return events
+  })
+
+  H.registerHostFn('mesh_exec', async (_sid, args) => {
+    const command = String(args[0] ?? '')
+    if (!command) throw new Error('mesh_exec(command, opts?) requires a command')
+    const opts = (args[1] as Record<string, unknown>) ?? {}
+    const { mesh } = await import('./mesh')
+    const result = await mesh.runTask({
+      command,
+      language: (opts.language as 'bash' | 'python' | 'node') ?? 'bash',
+      files: (opts.files as Record<string, string>) ?? undefined,
+      env: (opts.env as Record<string, string>) ?? undefined,
+      timeoutMs: Number(opts.timeoutMs ?? 120_000),
+      captureGlobs: (opts.captureGlobs as string[]) ?? undefined,
+      snapshotIn: opts.snapshotIn ? String(opts.snapshotIn) : undefined,
+      makeSnapshotOut: opts.makeSnapshotOut === true,
+      provider: opts.provider ? String(opts.provider) : undefined,
+      label: opts.label ? String(opts.label) : 'agent-mesh-exec',
+    })
+    return {
+      provider: result.provider,
+      exitCode: result.exitCode,
+      stdout: result.stdout.slice(0, 20_000),
+      stderr: result.stderr.slice(0, 5_000),
+      artifacts: result.artifacts,
+      snapshotOut: result.snapshotOut ?? null,
+      costUsd: result.costUsd,
+      durationMs: result.durationMs,
+    }
+  })
+
+  H.registerHostFn('mesh_providers', async () => {
+    const { mesh } = await import('./mesh')
+    return mesh.providerInfos().map((p) => ({
+      id: p.id, status: p.status, free: p.costTier === 'free',
+      caps: p.caps, inflight: p.inflight, detail: p.detail,
+    }))
+  })
+
+  H.registerHostFn('mesh_bundle', async (_sid, args) => {
+    const op = String(args[0] ?? 'save')
+    const { saveMeshBundle, loadMeshBundle } = await import('./mesh')
+    if (op === 'load') {
+      const files = await loadMeshBundle(args[1] ? String(args[1]) : undefined)
+      return files ? { files, keys: Object.keys(files) } : { exists: false }
+    }
+    const files = (args[1] as Record<string, string>) ?? {}
+    const ref = await saveMeshBundle(files, { by: 'agent' })
+    return { ref }
   })
 }
 

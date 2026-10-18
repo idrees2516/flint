@@ -92,25 +92,81 @@ POST /api/flint/sessions/:id/kernel    eval code in the session kernel
 POST /api/flint/sessions/:id/compact   fold the transcript
 POST /api/flint/factory/:slug/run      run a multi-agent machine
 POST /api/flint/sessions/:id/autonomous goals + completion gates
+POST /api/flint/mesh/exec             stateless run on the sandbox mesh
+GET  /api/flint/mesh/providers        provider health + free tiers
+POST /api/flint/durable/:name/rpc     RPC into any durable actor
+GET  /api/flint/durable/:name/subscribe  SSE state/event stream
+POST /api/flint/spaces/:id/publish    cross-agent pub/sub
 ```
 
-Full surface: 40+ routes under `/api/flint/*` (sessions, goals, heartbeats, harness, MCP, factory, models, metrics, cost, keys, templates, tasks, messages, sandboxes, ACP).
+Full surface: 55+ routes under `/api/flint/*` (sessions, goals, heartbeats, harness, MCP, factory, models, metrics, cost, keys, templates, tasks, messages, sandboxes, ACP, durable, spaces, mesh).
+
+## Durable Mesh — infinite scale, preserved + shared agent state
+
+A 2026-research-grounded scale layer modeled on **Cloudflare Durable Objects** (actor-per-key, SQLite-per-object storage, input/output gates, at-least-once durable alarms with 6× backoff, hibernation + lazy rehydration, RPC stubs, `setState → onStateUpdate` broadcast) and the **stateless sandbox** pattern used by E2B / Cloudflare Sandboxes / Daytona / InstaBox:
+
+```
+          ┌──────────────────────────────────────────────┐
+          │  Durable actors (state lives here, forever)  │
+          │  agent:<sessionId>      space:<slug>         │
+          │  · KV + event log + versioned snapshots      │
+          │  · durable alarms (fire turns later)         │
+          │  · LWW shared KV + pub/sub + handoffs        │
+          └───────────────┬──────────────────────────────┘
+     snapshot-in ─────────┴───────── snapshot-out
+          ┌───────────────┴──────────────────────────────┐
+          │  Stateless sandbox mesh (compute is cattle)  │
+          │  free-first: local · docker · instabox · e2b │
+          │  · daytona · github-actions · jupyter        │
+          │  circuit breakers · cross-provider failover  │
+          └──────────────────────────────────────────────┘
+```
+
+The stateless protocol: **snapshot-in → acquire sandbox → restore files → exec → capture artifacts → snapshot-out → recycle**. Any provider can run any task; a dead provider means failover, not data loss. Agents inside their Python kernels get the whole surface as host tools:
+
+```python
+host("durable_state", "put", {"phase": "researching"})      # durable actor state
+host("durable_checkpoint", "before-rag-index")              # versioned checkpoint
+host("schedule_wakeup", 900, "summarize findings")          # durable alarm
+host("space_publish", "flint-agents", "findings", {...})    # shared across agents
+host("mesh_exec", "python train.py", {                      # free sandbox compute
+     "files": {"train.py": code}, "snapshotIn": ref,
+     "makeSnapshotOut": True, "captureGlobs": ["metrics/*.json"]})
+```
+
+**Free providers** (configured via env, routed free-first):
+
+| Provider | Env | Free allowance |
+|---|---|---|
+| local processes | — | always free |
+| Docker | — | self-hosted, free |
+| InstaBox (instabox.sh) | `INSTABOX_API_KEY` | 5 full VMs, 4 vCPU / 8 GiB each |
+| E2B | `E2B_API_KEY` | $100 credits, 20 concurrent |
+| Daytona | `DAYTONA_API_KEY` | free tier, 90ms boots |
+| GitHub Actions | `FLINT_GH_TOKEN` + `FLINT_GH_REPO` | unlimited on public repos (`.github/workflows/flint-mesh.yml` included) |
+| Jupyter | `JUPYTER_URL` + `JUPYTER_TOKEN` | any Jupyter endpoint becomes a sandbox |
+
+Verified by E2E suites: `scripts/test-durable-mesh.mjs` (39 checks — single-writer serialization, snapshot round-trips across sandboxes, SSE fan-out, failover) and `scripts/test-durable-restart.mjs` (7 checks — state, spaces, snapshots and an alarm scheduled *before* a full server restart that fires *after* it).
 
 ## Repository layout
 
 ```
 src/lib/flint/          runtime: kernel, rlm, goals, heartbeats, harness,
-                        factory, mcp, models, acp (ACP bridge), events
-src/app/api/flint/      40+ REST routes
+                        factory, mcp, models, acp (ACP bridge), events,
+                        durable (DO runtime), actors (Agent/Space), mesh
+                        (stateless sandbox mesh, 7 providers)
+src/app/api/flint/      55+ REST routes (incl. durable/*, spaces/*, mesh/*)
 src/components/flint/   UI: dashboard, sandboxes, studio (RLM cockpit), …
 mini-services/          flint-kernel (CPython kernel), flint-realtime (socket.io)
-scripts/                flint-acp.mjs (ACP adapter), test-acp-*.mjs (E2E)
-prisma/                 schema (10 agent-runtime models)
+scripts/                flint-acp.mjs, E2E suites (ACP, durable-mesh, restart)
+prisma/                 schema (16 agent-runtime + durable-mesh models)
 ```
 
 ## Cost posture vs boat.dev
 
 Same 2vCPU·4GB workload: **$0.008/hr vs $0.018/hr**, per-second billing, free when stopped, and the auto-hibernate optimizer folds idle sandboxes to snapshot-only pricing (~92% savings). The agent runtime meters per-turn token costs across every provider in the catalog — subagents, compaction and heartbeats included.
+
+The Durable Mesh pushes the cost floor to **$0**: free-tier providers are routed first (5 InstaBox VMs + E2B credits + Daytona + unlimited GitHub-Actions compute on public repos + self-hosted Docker/local/Jupyter), state persists in durable actors regardless of which (or how many) sandboxes die, and failed providers fail over instead of billing retries.
 
 ## License
 

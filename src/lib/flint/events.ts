@@ -52,6 +52,15 @@ export type FlintEvent = {
     // ACP transport (editor bridge)
     | 'acp:connected'
     | 'acp:closed'
+    // Durable runtime (Cloudflare Durable Objects architecture)
+    | 'durable:state'
+    | 'durable:alarm'
+    | 'durable:event'
+    | 'space:published'
+    // Stateless sandbox mesh (E2B / Daytona / InstaBox / Docker / GH-Actions / Jupyter)
+    | 'mesh:task'
+    | 'mesh:sandbox'
+    | 'mesh:provider'
   level?: 'info' | 'warn' | 'error' | 'success'
   source?: 'fleet' | 'sandbox' | 'agent' | 'billing' | 'api'
   message: string

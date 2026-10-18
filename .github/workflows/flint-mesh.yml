@@ -1,0 +1,88 @@
+# Flint Mesh — free stateless sandbox execution on GitHub Actions.
+#
+# Driven by Flint's mesh scheduler (`github-actions` provider):
+#   POST /repos/{repo}/actions/workflows/flint-mesh.yml/dispatches
+#   inputs: { task_id, payload_b64 }
+#
+# The workflow materializes the task's files, runs the command,
+# captures artifacts, then commits mesh-results/<task_id>.json
+# which the provider polls for. Free unlimited compute on public
+# repos; 2000 free minutes/month on private repos.
+name: Flint Mesh Exec
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: 'Mesh task id (dbId)'
+        required: true
+      payload_b64:
+        description: 'Base64 JSON payload {command, language, env, files, captureGlobs, timeoutS}'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  exec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run mesh task
+        env:
+          PAYLOAD_B64: ${{ github.event.inputs.payload_b64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p workspace mesh-results
+          cd workspace
+          python3 - <<'PY'
+          import base64, json, os, subprocess, glob as g
+
+          payload = json.loads(base64.b64decode(os.environ["PAYLOAD_B64"]).decode())
+          task_id = "${{ github.event.inputs.task_id }}"
+
+          for rel, content in (payload.get("files") or {}).items():
+              path = os.path.dirname(rel) or "."
+              os.makedirs(path, exist_ok=True)
+              with open(rel, "w") as f:
+                  f.write(content)
+
+          cmd = payload["command"]
+          lang = payload.get("language", "bash")
+          timeout_s = min(payload.get("timeoutS", 600), 1500)
+          if lang == "python":
+              cmd = "python3 -c " + json.dumps(cmd)
+          elif lang == "node":
+              cmd = "node -e " + json.dumps(cmd)
+
+          proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout_s)
+          stdout, stderr, code = proc.stdout, proc.stderr, proc.returncode
+          print(stdout[-10000:])
+
+          artifacts = {}
+          for pattern in (payload.get("captureGlobs") or [])[:32]:
+              for f in g.glob(pattern):
+                  if os.path.isfile(f) and os.path.getsize(f) < 512 * 1024:
+                      with open(f) as fh:
+                          artifacts[f] = fh.read()
+
+          result = {
+              "exitCode": code,
+              "stdout": stdout[-100000:],
+              "stderr": stderr[-50000:],
+              "artifacts": artifacts,
+          }
+          with open(os.path.join("..", "mesh-results", task_id + ".json"), "w") as f:
+              json.dump(result, f)
+          PY
+
+      - name: Commit result
+        if: always()
+        run: |
+          git config user.name "flint-mesh-bot"
+          git config user.email "mesh@flint.local"
+          git add mesh-results/ || true
+          git commit -m "flint-mesh: result ${{ github.event.inputs.task_id }}" || echo "nothing to commit"
+          git push
